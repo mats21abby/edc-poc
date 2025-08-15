@@ -1,0 +1,17 @@
+{
+  "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+  "@id": "batteryDatasetFixed",
+  "properties": {
+    "name": "Battery Dataset SPARQL Endpoint (Fixed)",
+    "contenttype": "application/sparql-results+json",
+    "description": "Battery dataset accessible via SPARQL queries - Fixed URL"
+  },
+  "dataAddress": {
+    "type": "HttpData",
+    "name": "Battery Dataset",
+    "baseUrl": "http://localhost:3030/battery_dataset/query",
+    "proxyPath": "false",
+    "method": "POST",
+    "contentType": "application/x-www-form-urlencoded"
+  }
+} 
