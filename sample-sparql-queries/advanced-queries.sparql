@@ -1,0 +1,92 @@
+# 高度なSPARQLクエリ集
+# EDC環境での複合・分析クエリ例
+
+# 1. 健全性レポート（ステータス分類付き）
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+PREFIX sosa: <http://www.w3.org/ns/sosa/>
+
+SELECT ?battery ?stateOfHealth ?resultTime ?status
+WHERE {
+  ?battery rdf:type battery:Battery ;
+           battery:stateOfHealth ?stateOfHealth ;
+           sosa:resultTime ?resultTime .
+  
+  BIND(
+    IF(?stateOfHealth >= 90, "Excellent",
+    IF(?stateOfHealth >= 80, "Good", 
+    IF(?stateOfHealth >= 70, "Fair", "Poor"))) AS ?status
+  )
+}
+ORDER BY DESC(?stateOfHealth)
+
+# 2. 健全性の統計情報
+PREFIX battery: <http://example.org/battery/>
+
+SELECT 
+  (MIN(?stateOfHealth) AS ?minSOH)
+  (MAX(?stateOfHealth) AS ?maxSOH)
+  (AVG(?stateOfHealth) AS ?avgSOH)
+  (COUNT(?battery) AS ?count)
+WHERE {
+  ?battery battery:stateOfHealth ?stateOfHealth .
+}
+
+# 3. アラート生成クエリ
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+PREFIX sosa: <http://www.w3.org/ns/sosa/>
+
+SELECT ?battery ?stateOfHealth ?resultTime ?alertLevel
+WHERE {
+  ?battery rdf:type battery:Battery ;
+           battery:stateOfHealth ?stateOfHealth ;
+           sosa:resultTime ?resultTime .
+  
+  BIND(
+    IF(?stateOfHealth < 70, "CRITICAL",
+    IF(?stateOfHealth < 80, "WARNING", "OK")) AS ?alertLevel
+  )
+  
+  FILTER(?alertLevel != "OK")
+}
+ORDER BY ?stateOfHealth
+
+# 4. データ品質チェック（欠損データの確認）
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+
+SELECT ?battery
+WHERE {
+  ?battery rdf:type battery:Battery .
+  FILTER NOT EXISTS { ?battery battery:stateOfHealth ?soh }
+}
+
+# 5. 時系列データ分析（日別集計）
+PREFIX sosa: <http://www.w3.org/ns/sosa/>
+PREFIX battery: <http://example.org/battery/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?date (AVG(?soh) AS ?avgSOH) (COUNT(?battery) AS ?count)
+WHERE {
+  ?battery battery:stateOfHealth ?soh ;
+           sosa:resultTime ?datetime .
+  BIND(xsd:date(?datetime) AS ?date)
+}
+GROUP BY ?date
+ORDER BY ?date
+
+# 6. 複数条件フィルタリング
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+PREFIX sosa: <http://www.w3.org/ns/sosa/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?battery ?soh ?resultTime
+WHERE {
+  ?battery rdf:type battery:Battery ;
+           battery:stateOfHealth ?soh ;
+           sosa:resultTime ?resultTime .
+  FILTER(?soh > 85.0 && ?resultTime > "2025-06-01"^^xsd:date)
+}
+ORDER BY DESC(?soh) 

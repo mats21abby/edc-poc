@@ -1,0 +1,46 @@
+# 基本的なSPARQLクエリ集
+# EDC環境でのバッテリーデータクエリ例
+
+# 1. 全データの取得（制限付き）
+SELECT ?subject ?predicate ?object
+WHERE {
+  ?subject ?predicate ?object
+}
+LIMIT 25
+
+# 2. バッテリータイプのリソース一覧
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+
+SELECT ?battery
+WHERE {
+  ?battery rdf:type battery:Battery .
+}
+
+# 3. バッテリーの健全性データ取得
+PREFIX battery: <http://example.org/battery/>
+
+SELECT ?battery ?stateOfHealth
+WHERE {
+  ?battery battery:stateOfHealth ?stateOfHealth .
+}
+ORDER BY DESC(?stateOfHealth)
+
+# 4. 健全性が90%以上のバッテリー
+PREFIX battery: <http://example.org/battery/>
+
+SELECT ?battery ?soh
+WHERE {
+  ?battery battery:stateOfHealth ?soh .
+  FILTER(?soh >= 90.0)
+}
+ORDER BY DESC(?soh)
+
+# 5. バッテリー数のカウント
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX battery: <http://example.org/battery/>
+
+SELECT (COUNT(?battery) AS ?totalBatteries)
+WHERE {
+  ?battery rdf:type battery:Battery .
+} 

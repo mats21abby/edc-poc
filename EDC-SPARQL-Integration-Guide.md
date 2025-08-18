@@ -70,16 +70,28 @@ java -Dedc.fs.config=transfer/transfer-03-consumer-pull/resources/configuration/
 
 ### 3.3 起動確認
 ```bash
-# コンシューマーのヘルスチェック
-curl -s "http://localhost:29193/api/check/health" | jq .
+# 管理APIの動作確認（プロバイダー）
+curl -s "http://localhost:19193/management/v3/assets/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length'
 
-# プロバイダーのヘルスチェック  
-curl -s "http://localhost:19193/api/check/health" | jq .
+# 管理APIの動作確認（コンシューマー）  
+curl -s "http://localhost:29193/management/v3/catalog/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "counterPartyAddress": "http://localhost:19194/protocol", "protocol": "dataspace-protocol-http"}' \
+  | jq '."dcat:dataset" | length'
 ```
 
 ---
 
 ## 📊 手順4: データセットとポリシーの登録
+
+**⚡ 自動化オプション**: 手順4-6を自動実行したい場合は、以下のスクリプトを使用できます：
+```bash
+./setup-edc-sparql.sh
+```
+以下は手動実行の手順です。
 
 ### 4.1 バッテリーデータセットアセットの作成
 ```bash
@@ -107,17 +119,26 @@ curl -X POST "http://localhost:19193/management/v3/assets" \
 
 ### 4.2 アクセスポリシーの作成
 ```bash
+# EDCサンプルのポリシーファイルを使用
+curl -X POST "http://localhost:19193/management/v3/policydefinitions" \
+     -H "Content-Type: application/json" \
+     -d @transfer/transfer-01-negotiation/resources/create-policy.json
+
+# または、直接JSON指定
 curl -X POST "http://localhost:19193/management/v3/policydefinitions" \
      -H "Content-Type: application/json" \
      -d '{
-       "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+       "@context": {
+         "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+         "odrl": "http://www.w3.org/ns/odrl/2/"
+       },
        "@id": "aPolicy",
-       "@type": "PolicyDefinition",
        "policy": {
-         "@type": "odrl:Set",
-         "odrl:permission": [],
-         "odrl:prohibition": [],
-         "odrl:obligation": []
+         "@context": "http://www.w3.org/ns/odrl.jsonld",
+         "@type": "Set",
+         "permission": [],
+         "prohibition": [],
+         "obligation": []
        }
      }'
 ```
@@ -141,6 +162,46 @@ curl -X POST "http://localhost:19193/management/v3/contractdefinitions" \
 
 ### 5.1 カタログの確認
 ```bash
+# カタログにアセットが表示されることを確認
+curl -X POST "http://localhost:29193/management/v3/catalog/request" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+       "counterPartyAddress": "http://localhost:19194/protocol",
+       "protocol": "dataspace-protocol-http"
+     }' | jq '."dcat:dataset"'
+
+# アセットが表示されない場合は、以下を確認：
+# 1. アセットが登録されているか
+curl -s "http://localhost:19193/management/v3/assets/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' | jq .
+
+# 2. ポリシーが登録されているか  
+curl -s "http://localhost:19193/management/v3/policydefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' | jq .
+
+# 3. コントラクト定義が登録されているか
+curl -s "http://localhost:19193/management/v3/contractdefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' | jq .
+```
+
+### 5.2 オファーIDの取得
+```bash
+# カタログからオファーIDを取得（アセットが表示されていることを前提）
+OFFER_ID=$(curl -X POST "http://localhost:29193/management/v3/catalog/request" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
+       "counterPartyAddress": "http://localhost:19194/protocol",
+       "protocol": "dataspace-protocol-http"
+     }' -s | jq -r '."dcat:dataset" | ."odrl:hasPolicy"."@id"')
+
+echo "Offer ID: $OFFER_ID"
+
+# オファーIDが取得できない場合は、カタログを直接確認
 curl -X POST "http://localhost:29193/management/v3/catalog/request" \
      -H "Content-Type: application/json" \
      -d '{
@@ -148,19 +209,6 @@ curl -X POST "http://localhost:29193/management/v3/catalog/request" \
        "counterPartyAddress": "http://localhost:19194/protocol",
        "protocol": "dataspace-protocol-http"
      }' | jq .
-```
-
-### 5.2 オファーIDの取得
-```bash
-OFFER_ID=$(curl -X POST "http://localhost:29193/management/v3/catalog/request" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "@context": { "@vocab": "https://w3id.org/edc/v0.0.1/ns/" },
-       "counterPartyAddress": "http://localhost:19194/protocol",
-       "protocol": "dataspace-protocol-http"
-     }' -s | jq -r '."dcat:dataset"[] | select(.["@id"] == "batteryDatasetFixed") | ."odrl:hasPolicy"."@id"')
-
-echo "Offer ID: $OFFER_ID"
 ```
 
 ### 5.3 コントラクト交渉の開始
@@ -190,9 +238,28 @@ echo "Negotiation ID: $NEGOTIATION_ID"
 ```bash
 # 5秒待機後に状態確認
 sleep 5
-CONTRACT_AGREEMENT_ID=$(curl -s "http://localhost:29193/management/v3/contractnegotiations/$NEGOTIATION_ID" | jq -r '.contractAgreementId')
+
+# 正しい方法：交渉一覧から該当する交渉を検索
+CONTRACT_AGREEMENT_ID=$(curl -s "http://localhost:29193/management/v3/contractnegotiations/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq -r ".[] | select(.\"@id\" == \"$NEGOTIATION_ID\") | .contractAgreementId")
 
 echo "Contract Agreement ID: $CONTRACT_AGREEMENT_ID"
+
+# 交渉状態も同時に確認
+NEGOTIATION_STATE=$(curl -s "http://localhost:29193/management/v3/contractnegotiations/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq -r ".[] | select(.\"@id\" == \"$NEGOTIATION_ID\") | .state")
+
+echo "Negotiation State: $NEGOTIATION_STATE"
+
+# 交渉が完了していない場合は待機
+if [ "$NEGOTIATION_STATE" != "FINALIZED" ]; then
+  echo "交渉がまだ完了していません。しばらく待ってから再実行してください。"
+  exit 1
+fi
 ```
 
 ### 5.5 データ転送の開始
@@ -270,19 +337,46 @@ curl -X POST "http://localhost:19291/public/" \
 - プロバイダーの再ビルドと再起動
 - SPARQLエンドポイントの動作確認
 
-#### 2. 403 Forbidden エラー
+
+
+#### 1. カタログが空 / オファーIDが取得できない
+**原因**: ポリシー定義が存在しない、またはコントラクト定義の参照エラー
+**解決策**: 
+- ポリシー定義の確認: `curl -s "http://localhost:19193/management/v3/policydefinitions/request" -X POST -H "Content-Type: application/json" -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' | jq .`
+- 不足している場合は `aPolicy` を作成: `curl -X POST "http://localhost:19193/management/v3/policydefinitions" -H "Content-Type: application/json" -d @transfer/transfer-01-negotiation/resources/create-policy.json`
+
+#### 2. 管理APIが404を返す
+**原因**: EDCにはデフォルトでヘルスチェックエンドポイントが存在しない
+**解決策**: 
+- 管理APIエンドポイント（`/management/v3/assets/request` など）で動作確認
+- 404は正常な動作です
+
+#### 3. 管理APIが405 Method Not Allowedを返す
+**原因**: EDC管理APIは個別リソースへの直接アクセス（`/resource/{id}`）を許可しない
+**解決策**: 
+- ❌ 間違い: `curl "http://localhost:29193/management/v3/contractnegotiations/{id}"`
+- ✅ 正しい: `curl -X POST "http://localhost:29193/management/v3/contractnegotiations/request" -d '{"@type": "QuerySpec"}' | jq ".[] | select(.\"@id\" == \"{id}\")"`
+- 全ての管理APIリソースは `/request` エンドポイントから検索する
+
+#### 4. 405 Method Not Allowed エラー
+**原因**: プロキシの実装問題またはSPARQLエンドポイントの問題
+**解決策**: 
+- プロバイダーの再ビルドと再起動
+- SPARQLエンドポイントの動作確認
+
+#### 5. 403 Forbidden エラー
 **原因**: EDRトークンの期限切れまたは無効
 **解決策**: 
 - 新しいコントラクト交渉の実行
 - 新しいEDRトークンの取得
 
-#### 3. 404 Not Found エラー
+#### 6. 404 Not Found エラー
 **原因**: コントラクトアグリーメントが見つからない
 **解決策**: 
 - プロバイダーの再起動後にリソースを再作成
 - アセット、ポリシー、コントラクト定義の再登録
 
-#### 4. コネクタが起動しない
+#### 7. コネクタが起動しない
 **原因**: ポートの競合またはビルドエラー
 **解決策**: 
 - 使用ポートの確認 (19193, 19194, 19291, 29193)
@@ -295,17 +389,20 @@ curl -X POST "http://localhost:19291/public/" \
 ### 作成されるファイル
 ```
 Samples/
-├── battery-dataset-asset-fixed.json      # バッテリーデータセット定義
-├── battery-contract-negotiation-fixed.json # コントラクト交渉リクエスト
-├── battery-transfer-request-fixed.json   # データ転送リクエスト
-├── deletion-policy-example.json          # 削除ポリシー例
-├── check-deletion-obligations.sh         # 削除義務確認スクリプト
-└── EDC-SPARQL-Integration-Guide.md      # このガイド
+├── battery-dataset-asset-fixed.json          # バッテリーデータセット定義
+├── battery-contract-negotiation-fixed.json   # コントラクト交渉リクエスト
+├── battery-transfer-request-fixed.json       # データ転送リクエスト
+├── universal-contract-definition.json        # ユニバーサルコントラクト定義
+├── setup-edc-sparql.sh                      # 自動セットアップスクリプト
+├── cleanup-edc-resources.sh                 # リソースクリーンアップスクリプト
+├── EDC-SPARQL-Integration-Guide.md          # このガイド
+└── QUICK-REFERENCE.md                       # クイックリファレンス
 ```
 
 ### 重要な設定ファイル
 - `transfer/transfer-03-consumer-pull/resources/configuration/provider.properties`
 - `transfer/transfer-00-prerequisites/resources/configuration/consumer-configuration.properties`
+- `transfer/transfer-01-negotiation/resources/create-policy.json` - aPolicyの定義
 
 ---
 
@@ -354,3 +451,172 @@ Samples/
 - Dataspace Protocol Specification
 - SPARQL 1.1 Query Language
 - Apache Jena Fuseki Documentation 
+
+---
+
+## 🗑️ 手順7: リソースの削除
+
+### 7.1 アセットの削除
+```bash
+# 削除前に登録されているアセットを確認
+curl -s "http://localhost:19193/management/v3/assets/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {id: .["@id"], name: .properties.name}'
+
+# アセットを削除
+curl -X DELETE "http://localhost:19193/management/v3/assets/batteryDatasetFixed" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}'
+
+# 削除確認
+curl -s "http://localhost:19193/management/v3/assets/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length'
+```
+
+### 7.2 ポリシー定義の削除
+```bash
+# 削除前に登録されているポリシーを確認
+curl -s "http://localhost:19193/management/v3/policydefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {id: .["@id"]}'
+
+# ポリシー定義を削除
+curl -X DELETE "http://localhost:19193/management/v3/policydefinitions/aPolicy" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}'
+
+# 削除確認
+curl -s "http://localhost:19193/management/v3/policydefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length'
+```
+
+### 7.3 コントラクト定義の削除
+```bash
+# 削除前に登録されているコントラクト定義を確認
+curl -s "http://localhost:19193/management/v3/contractdefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {id: .["@id"], accessPolicyId: .accessPolicyId, contractPolicyId: .contractPolicyId}'
+
+# コントラクト定義を削除
+curl -X DELETE "http://localhost:19193/management/v3/contractdefinitions/universalContractDef" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}'
+
+# 削除確認
+curl -s "http://localhost:19193/management/v3/contractdefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length'
+```
+
+### 7.4 転送プロセスの確認と停止
+```bash
+# アクティブな転送プロセスを確認
+curl -s "http://localhost:29193/management/v3/transferprocesses/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {id: .["@id"], state: .state, assetId: .assetId}'
+
+# 転送プロセスの終了（必要に応じて）
+# 注意: 通常は自動的に完了するため、手動終了は推奨されません
+TRANSFER_ID="your-transfer-id"
+curl -X POST "http://localhost:29193/management/v3/transferprocesses/$TRANSFER_ID/terminate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+    "reason": "Manual termination for cleanup"
+  }'
+```
+
+### 7.5 コントラクト交渉の確認
+```bash
+# 完了したコントラクト交渉を確認
+curl -s "http://localhost:29193/management/v3/contractnegotiations/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {id: .["@id"], state: .state, contractAgreementId: .contractAgreementId}'
+
+# 注意: コントラクト交渉は削除できません（履歴として保持）
+```
+
+### 7.6 EDRトークンの確認
+```bash
+# アクティブなEDRトークンを確認
+curl -s "http://localhost:29193/management/v3/edrs/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | {transferProcessId: .transferProcessId, createdAt: .createdAt}'
+
+# 注意: EDRトークンは有効期限で自動的に無効化されます
+```
+
+### 7.7 完全なクリーンアップスクリプト
+```bash
+#!/bin/bash
+echo "🗑️ EDCリソースのクリーンアップを開始します..."
+
+# コントラクト定義を削除（依存関係のため最初に削除）
+echo "1. コントラクト定義を削除中..."
+curl -X DELETE "http://localhost:19193/management/v3/contractdefinitions/universalContractDef" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}' -s > /dev/null
+
+# アセットを削除
+echo "2. アセットを削除中..."
+curl -X DELETE "http://localhost:19193/management/v3/assets/batteryDatasetFixed" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}' -s > /dev/null
+
+# ポリシー定義を削除
+echo "3. ポリシー定義を削除中..."
+curl -X DELETE "http://localhost:19193/management/v3/policydefinitions/aPolicy" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}' -s > /dev/null
+
+# 削除結果を確認
+echo "4. 削除結果を確認中..."
+ASSETS_COUNT=$(curl -s "http://localhost:19193/management/v3/assets/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length')
+
+POLICIES_COUNT=$(curl -s "http://localhost:19193/management/v3/policydefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length')
+
+CONTRACTS_COUNT=$(curl -s "http://localhost:19193/management/v3/contractdefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq 'length')
+
+echo "✅ クリーンアップ完了:"
+echo "   - アセット: $ASSETS_COUNT 個"
+echo "   - ポリシー定義: $POLICIES_COUNT 個" 
+echo "   - コントラクト定義: $CONTRACTS_COUNT 個"
+```
+
+### ⚠️ 削除時の注意事項
+
+#### **削除順序の重要性**
+1. **コントラクト定義** → 他のリソースを参照するため最初に削除
+2. **アセット** → データの実体
+3. **ポリシー定義** → 最後に削除（参照されなくなってから）
+
+#### **削除できないリソース**
+- **コントラクト交渉**: 履歴として保持される
+- **転送プロセス**: 完了したものは履歴として保持
+- **EDRトークン**: 有効期限で自動無効化
+
+#### **インメモリストレージの場合**
+- コネクタ再起動で全データが自動的にクリアされる
+- 永続化ストレージを使用している場合は手動削除が必要
+
+--- 

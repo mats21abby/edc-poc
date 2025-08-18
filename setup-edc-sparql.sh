@@ -185,7 +185,10 @@ negotiate_and_transfer() {
     log_info "交渉完了を待機中..."
     sleep 5
     
-    CONTRACT_AGREEMENT_ID=$(curl -s "$CONSUMER_MGMT/contractnegotiations/$NEGOTIATION_ID" | jq -r '.contractAgreementId')
+    CONTRACT_AGREEMENT_ID=$(curl -s "$CONSUMER_MGMT/contractnegotiations/request" \
+         -X POST -H "Content-Type: application/json" \
+         -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+         | jq -r ".[] | select(.\"@id\" == \"$NEGOTIATION_ID\") | .contractAgreementId")
     
     if [ "$CONTRACT_AGREEMENT_ID" = "null" ] || [ -z "$CONTRACT_AGREEMENT_ID" ]; then
         log_error "コントラクトアグリーメントIDの取得に失敗しました"
