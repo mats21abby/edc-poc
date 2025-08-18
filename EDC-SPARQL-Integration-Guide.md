@@ -376,7 +376,15 @@ curl -X POST "http://localhost:19291/public/" \
 - プロバイダーの再起動後にリソースを再作成
 - アセット、ポリシー、コントラクト定義の再登録
 
-#### 7. コネクタが起動しない
+#### 7. リソース削除時の依存関係エラー
+**エラー**: `Asset cannot be deleted as it is referenced by at least one contract agreement or an ongoing negotiation`
+**原因**: アセットが契約合意や進行中の交渉で参照されている
+**解決策**: 
+- 参照しているコントラクト定義を先に削除
+- アクティブな転送プロセスの終了
+- プロバイダーコネクタの再起動（インメモリストレージの場合）
+
+#### 8. コネクタが起動しない
 **原因**: ポートの競合またはビルドエラー
 **解決策**: 
 - 使用ポートの確認 (19193, 19194, 19291, 29193)
@@ -457,23 +465,96 @@ Samples/
 ## 🗑️ 手順7: リソースの削除
 
 ### 7.1 アセットの削除
+
+#### **⚠️ 依存関係エラーの対処**
+アセット削除時に以下のエラーが発生する場合があります：
+```json
+[{"message":"Asset batteryDatasetFixed cannot be deleted as it is referenced by at least one contract agreement or an ongoing negotiation","type":"ObjectConflict","path":null,"invalidValue":null}]
+```
+
+この場合、以下の順序で削除を実行してください：
+
 ```bash
-# 削除前に登録されているアセットを確認
+# 1. 削除前に登録されているアセットを確認
 curl -s "http://localhost:19193/management/v3/assets/request" \
   -X POST -H "Content-Type: application/json" \
   -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
   | jq '.[] | {id: .["@id"], name: .properties.name}'
 
-# アセットを削除
+# 2. 該当アセットを参照しているコントラクト定義を確認
+curl -s "http://localhost:19193/management/v3/contractdefinitions/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | select((.assetsSelector | type) == "object" and .assetsSelector.operandRight == "batteryDatasetFixed") | {id: .["@id"], assetsSelector: .assetsSelector}'
+
+# 3. 参照しているコントラクト定義を先に削除
+curl -X DELETE "http://localhost:19193/management/v3/contractdefinitions/universalContractDef" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}'
+
+# 4. 進行中の転送プロセスを確認
+curl -s "http://localhost:29193/management/v3/transferprocesses/request" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+  | jq '.[] | select(.assetId == "batteryDatasetFixed" and (.state == "STARTED" or .state == "REQUESTED")) | {id: .["@id"], state: .state, assetId: .assetId}'
+
+# 5. 必要に応じて進行中の転送を終了
+# アクティブな転送プロセスがある場合は個別に終了
+# curl -X POST "http://localhost:29193/management/v3/transferprocesses/TRANSFER_ID/terminate" \
+#   -H "Content-Type: application/json" \
+#   -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "reason": "Manual cleanup"}'
+
+# 例: 複数の転送プロセスを一括終了
+# curl -s "http://localhost:29193/management/v3/transferprocesses/request" \
+#   -X POST -H "Content-Type: application/json" \
+#   -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+#   | jq -r '.[] | select(.assetId == "batteryDatasetFixed" and (.state == "STARTED" or .state == "REQUESTED")) | .["@id"]' \
+#   | while read -r transfer_id; do
+#       curl -X POST "http://localhost:29193/management/v3/transferprocesses/$transfer_id/terminate" \
+#         -H "Content-Type: application/json" \
+#         -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "reason": "Manual cleanup"}'
+#     done
+
+# 6. アセットを削除
 curl -X DELETE "http://localhost:19193/management/v3/assets/batteryDatasetFixed" \
   -H "Content-Type: application/json" \
   -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}'
 
-# 削除確認
+# 7. 削除確認
 curl -s "http://localhost:19193/management/v3/assets/request" \
   -X POST -H "Content-Type: application/json" \
   -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
   | jq 'length'
+
+# 削除が失敗した場合の確認
+ASSET_DELETE_RESPONSE=$(curl -s -X DELETE "http://localhost:19193/management/v3/assets/batteryDatasetFixed" \
+  -H "Content-Type: application/json" \
+  -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}')
+
+if echo "$ASSET_DELETE_RESPONSE" | grep -q "ObjectConflict"; then
+  echo "⚠️ アセット削除に失敗しました。以下を確認してください："
+  
+  echo "1. 完了した契約合意（削除不可）:"
+  curl -s "http://localhost:29193/management/v3/contractnegotiations/request" \
+    -X POST -H "Content-Type: application/json" \
+    -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+    | jq '.[] | select(.state == "FINALIZED") | {id: .["@id"], state: .state, contractAgreementId: .contractAgreementId}'
+  
+  echo "2. アクティブな転送プロセス:"
+  curl -s "http://localhost:29193/management/v3/transferprocesses/request" \
+    -X POST -H "Content-Type: application/json" \
+    -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+    | jq '.[] | select(.state == "STARTED" or .state == "REQUESTED") | {id: .["@id"], state: .state, assetId: .assetId}'
+  
+  echo ""
+  echo "💡 解決策:"
+  echo "   - アクティブな転送プロセスがある場合は上記の手順5で終了"
+  echo "   - 契約合意は履歴として保持され削除不可"
+  echo "   - 🔄 推奨: プロバイダーコネクタを再起動（インメモリデータを全クリア）"
+  
+else
+  echo "✅ アセットが正常に削除されました"
+fi
 ```
 
 ### 7.2 ポリシー定義の削除
@@ -611,12 +692,24 @@ echo "   - コントラクト定義: $CONTRACTS_COUNT 個"
 3. **ポリシー定義** → 最後に削除（参照されなくなってから）
 
 #### **削除できないリソース**
-- **コントラクト交渉**: 履歴として保持される
+- **コントラクト交渉**: 履歴として保持される（`FINALIZED`状態）
+- **契約合意**: 履歴として保持される（削除不可）
 - **転送プロセス**: 完了したものは履歴として保持
 - **EDRトークン**: 有効期限で自動無効化
 
 #### **インメモリストレージの場合**
-- コネクタ再起動で全データが自動的にクリアされる
+- **🔄 推奨解決策**: コネクタ再起動で全データが自動的にクリアされる
+- **手動削除の限界**: 契約合意が存在するアセットは削除不可
 - 永続化ストレージを使用している場合は手動削除が必要
+
+#### **💡 実用的な解決手順**
+```bash
+# 1. プロバイダーコネクタを停止（Ctrl+C）
+# 2. プロバイダーコネクタを再起動
+java -Dedc.fs.config=transfer/transfer-03-consumer-pull/resources/configuration/provider.properties \
+     -jar transfer/transfer-03-consumer-pull/provider-proxy-data-plane/build/libs/connector.jar
+
+# 3. 必要に応じてリソースを再作成
+```
 
 --- 

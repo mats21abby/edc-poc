@@ -65,12 +65,33 @@ delete_resources() {
       -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}' \
       -s > /dev/null 2>&1 || log_warn "コントラクト定義の削除に失敗（存在しない可能性があります）"
     
-    # 2. アセットを削除
+    # 2. アセットを削除（依存関係エラー対策）
     log_info "2. アセットを削除中..."
-    curl -X DELETE "$PROVIDER_MGMT/assets/batteryDatasetFixed" \
+    ASSET_DELETE_RESULT=$(curl -X DELETE "$PROVIDER_MGMT/assets/batteryDatasetFixed" \
       -H "Content-Type: application/json" \
       -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}}' \
-      -s > /dev/null 2>&1 || log_warn "アセットの削除に失敗（存在しない可能性があります）"
+      -s 2>/dev/null)
+    
+    # 依存関係エラーの確認
+    if echo "$ASSET_DELETE_RESULT" | grep -q "ObjectConflict" 2>/dev/null; then
+        log_warn "⚠️ アセットが契約合意または進行中の交渉で参照されています"
+        log_info "アクティブな転送プロセスを確認中..."
+        
+        # アクティブな転送プロセスをチェック
+        ACTIVE_TRANSFERS=$(curl -s "$CONSUMER_MGMT/transferprocesses/request" \
+          -X POST -H "Content-Type: application/json" \
+          -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' \
+          2>/dev/null | jq -r '.[] | select(.assetId == "batteryDatasetFixed" and (.state == "STARTED" or .state == "REQUESTED")) | .["@id"]' 2>/dev/null)
+        
+        if [ -n "$ACTIVE_TRANSFERS" ]; then
+            log_warn "アクティブな転送プロセスが見つかりました"
+            log_info "推奨解決策: プロバイダーコネクタを再起動してインメモリデータをクリア"
+        else
+            log_warn "推奨解決策: プロバイダーコネクタを再起動してインメモリデータをクリア"
+        fi
+    else
+        log_info "アセットが正常に削除されました"
+    fi
     
     # 3. ポリシー定義を削除
     log_info "3. ポリシー定義を削除中..."
