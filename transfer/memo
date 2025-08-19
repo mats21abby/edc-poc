@@ -97,3 +97,7 @@ https://w3id.org/manufacturing/industry40/v1/ns/
   }
 }
 結論: 実際の運用では、組織のドメイン名をベースとした名前空間を使用するのが一般的です。EDCのデフォルト名前空間は開発・学習用として使い、プロダクション環境では独自の名前空間を設定することが推奨されます。
+
+アセットの確認方法
+curl -s "http://localhost:19193/management/v3/assets/request" -X POST -H "Content-Type: application/json" -d '{"@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}, "@type": "QuerySpec"}' | jq .
+
